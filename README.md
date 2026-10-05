@@ -46,7 +46,7 @@ Tout se fait sur GitHub, aucune machine à préparer.
    - **release_tag** : le nom de la Release. Vide = la valeur de `ref`. Pour un commit,
      donner un nom lisible (`4.8-dev7`).
 3. Quatre machines compilent en parallèle (éditeur Windows, modèle d'export Windows release,
-   Windows debug, Linux release pour le serveur). Compter **une à deux heures** en tout.
+   Windows debug, Linux release pour le serveur). Compter **environ 50 minutes** en tout.
 4. Les binaires arrivent dans la Release (ou dans les artefacts du lancement).
 
 ## Changer de version de Godot
@@ -79,11 +79,18 @@ lecteur d'écran (`accesskit=no`). Le jeu est en Vulkan : Direct3D 12 n'est pas 
 
 ## Durées mesurées
 
-| Cible | 32 cœurs | Machine GitHub (4 cœurs) |
+Compilation seule (`BUILD-INFO`), sans l'installation des paquets ni le téléchargement des
+sources :
+
+| Cible | Machine GitHub (4 cœurs) | 32 cœurs (pour comparer) |
 |---|---|---|
-| Éditeur Windows | 6 min 34 | à mesurer |
-| Modèle Windows (chacun) | 4 min 27 | à mesurer |
-| Modèle Linux | 3 min 36 | à mesurer |
+| Éditeur Windows | 46 min 49 | 6 min 34 |
+| Modèle Windows release | 33 min 36 | 4 min 27 |
+| Modèle Windows debug | 32 min 36 | 4 min 27 |
+| Modèle Linux release | 22 min 29 | 3 min 36 |
+
+Lancement complet de `4.7.2-stable` le 2026-10-05 : **48 min**, Release comprise (les
+quatre machines en parallèle, l'éditeur fixe la durée).
 
 ## Compiler sans GitHub
 
