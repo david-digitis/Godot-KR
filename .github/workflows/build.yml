@@ -1,0 +1,132 @@
+# Compile Godot en double precision : une cible par machine, les quatre en
+# parallele, puis (si demande) une Release avec les binaires.
+# Lancement a la main : onglet Actions > "Godot double precision" > Run workflow.
+#
+# Duree : 45 a 90 min par cible sur une machine standard (4 coeurs, 16 Go).
+# lto=none tient dans 16 Go ; lto=full ne passe pas sur ces machines.
+name: Godot double precision
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Etiquette ou commit de godotengine/godot (ex. 4.7.2-stable)"
+        required: true
+        default: "4.7.2-stable"
+      version_status:
+        description: "Pre-version compilee depuis un commit : dev7, beta1... (vide pour une stable)"
+        required: false
+        default: ""
+      publish:
+        description: "Publier une Release avec les binaires"
+        type: boolean
+        default: false
+      release_tag:
+        description: "Nom de la Release (vide = la valeur de ref ; pour un commit, ex. 4.8-dev7)"
+        required: false
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [win-editor, win-release, win-debug, linux-release]
+    steps:
+      - uses: actions/checkout@v4
+
+      # Les sources et les objets de Godot prennent 6 a 8 Go : on travaille sur
+      # le disque qui a le plus de place (souvent /mnt plutot que le disque systeme).
+      - name: Choisir le disque de travail
+        run: |
+          df -h / /mnt "$RUNNER_TEMP" || true
+          free_root=$(df --output=avail -B1 "$RUNNER_TEMP" | tail -1)
+          free_mnt=$(df --output=avail -B1 /mnt 2>/dev/null | tail -1 || echo 0)
+          if [ "${free_mnt:-0}" -gt "$free_root" ]; then
+            sudo mkdir -p /mnt/godot-double
+            sudo chown "$(id -u):$(id -g)" /mnt/godot-double
+            echo "WORK=/mnt/godot-double" >> "$GITHUB_ENV"
+          else
+            echo "WORK=$RUNNER_TEMP/godot-double" >> "$GITHUB_ENV"
+          fi
+
+      - name: Compiler ${{ matrix.target }}
+        env:
+          TARGETS: ${{ matrix.target }}
+          GODOT_VERSION_STATUS: ${{ inputs.version_status }}
+        run: |
+          [ -n "$GODOT_VERSION_STATUS" ] || unset GODOT_VERSION_STATUS
+          echo "WORK=$WORK"
+          bash ./build_godot_double.sh "${{ inputs.ref }}" "$GITHUB_WORKSPACE/out"
+
+      - name: Garder les binaires
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: |
+            out/godot.*
+            out/BUILD-INFO.txt
+            out/LICENSE.txt
+            out/COPYRIGHT.txt
+            out/log-*.txt
+          retention-days: 30
+
+  release:
+    needs: build
+    if: inputs.publish
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REF: ${{ inputs.ref }}
+      TAG: ${{ inputs.release_tag || inputs.ref }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Preparer les fichiers
+        run: |
+          mkdir release
+          for target in win-editor win-release win-debug linux-release; do
+            cp "artifacts/$target/BUILD-INFO.txt" "release/BUILD-INFO-$target.txt"
+          done
+          cp artifacts/linux-release/LICENSE.txt artifacts/linux-release/COPYRIGHT.txt release/
+          # L'editeur et sa console vont ensemble, avec la licence.
+          (cd artifacts/win-editor && zip -9 "../../release/godot-kr-$TAG-windows-editor.zip" \
+            godot.windows.editor.*.exe LICENSE.txt COPYRIGHT.txt)
+          # Les modeles d'export tels quels (le chemin se donne dans export_presets.cfg).
+          cp artifacts/win-release/godot.windows.template_release.* \
+             artifacts/win-debug/godot.windows.template_debug.* \
+             artifacts/linux-release/godot.linuxbsd.template_release.* release/
+          (cd release && sha256sum * > SHA256SUMS.txt)
+          ls -la release
+
+      - name: Publier la Release
+        run: |
+          commit=$(sed -n 's/^commit *: //p' release/BUILD-INFO-win-editor.txt)
+          options=$(sed -n 's/^options *: //p' release/BUILD-INFO-win-editor.txt)
+          cat > notes.md <<EOF
+          Godot \`$REF\` compilé en **double précision**, depuis les sources officielles.
+
+          - Commit de godotengine/godot : \`$commit\`
+          - Options : \`$options\`
+          - Statut de version : \`${{ inputs.version_status || 'stable' }}\`
+          - Lancement : $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID
+
+          Fichiers : l'éditeur Windows (zip), les modèles d'export Windows (release, debug)
+          et Linux (release, serveur), les \`BUILD-INFO-<cible>.txt\` (durée, taille),
+          \`SHA256SUMS.txt\`. Godot est sous licence MIT, ses tiers dans \`COPYRIGHT.txt\`.
+          EOF
+          gh release create "$TAG" release/* \
+            --repo "$GITHUB_REPOSITORY" \
+            --target "$GITHUB_SHA" \
+            --title "Godot $REF double précision" \
+            --notes-file notes.md
